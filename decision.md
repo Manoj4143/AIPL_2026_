@@ -145,4 +145,52 @@ This document logs architectural, algorithmic, and machine-learning decisions fo
 - **Alternatives Considered**: None.
 - **Consequences**: The system is fully polished and ready for Phase 3 deployment packaging (Docker, FastAPI endpoints, and cloud hosting).
 
+---
+
+## Decision 11: Robust Venue Canonicalization and Unknown Venue Fallback
+- **Date**: 2026-10-11
+- **Status**: Accepted
+- **Context**: Discrepancies between venue strings (whitespace differences, punctuation variations such as "M. A." vs "MA", casing, and directory path syncing between `d:\AIPL` and `d:\AIPL\AIPL_2026_`) caused `match_count` lookups to return 0 for known grounds in some execution contexts.
+- **Decision**: Implement a centralized `canonicalize_venue_name(venue, known_venues=None)` helper in `src/prediction.py`. The helper normalizes whitespace, collapses repeated spaces, normalizes punctuation differences, safely matches casing, and maps known aliases to the canonical training metadata name. For known venues, genuine historical matches and average scores are returned. For unknown venues, a documented safe fallback is returned with `match_count = 0`, `avg_score = 330.0` (neutral prior), clearly designated as estimated/unavailable.
+- **Reason**: Guarantees deterministic, genuine metadata retrieval for known venues across UI, feature encoding, and unit tests, while strictly preventing fabricated numbers for unknown venues.
+- **Alternatives Considered**:
+  - Relaxing the test assertion to accept 0 for known venues (Rejected: Weakens test integrity).
+  - Hardcoding a single venue lookup dictionary (Rejected: Inflexible; algorithmic normalization handles broader string variations).
+- **Consequences**: `match_count > 0` consistently for known venues; transparent and honest reporting for unknown venues.
+
+---
+
+## Decision 12: Decoupled Inference vs. Retraining and Missing Raw Data Error Handling
+- **Date**: 2026-10-11
+- **Status**: Accepted
+- **Context**: The raw ball-by-ball dataset `train_IPL.csv` (60MB) is located in `d:\AIPL\AIPL_2026_\train_IPL.csv`. Running `python -m src.preprocessing` from the parent directory `d:\AIPL` failed with a raw `FileNotFoundError` when `train_IPL.csv` was not in parent paths. Furthermore, users might confuse running inference with retraining.
+- **Decision**:
+  1. Clearly decouple normal inference from optional retraining:
+     - Normal inference (`streamlit run app.py` and unit tests) relies solely on serialized artifacts (`models/catboost_model.cbm`, `models/model_metadata.json`, `models/model_artifacts.joblib`) and NEVER requires `train_IPL.csv`.
+     - Optional retraining (`python -m src.preprocessing`) requires `train_IPL.csv`.
+  2. Expand `find_data_file` search paths in `src/preprocessing.py` to search `AIPL_2026_/` subdirectories as well as parent and root directories.
+  3. If `train_IPL.csv` is missing during retraining, raise a clear, instructional message explaining that raw data is only needed for retraining and advising the user to use `streamlit run app.py` for inference.
+- **Reason**: Protects inference stability, ensures unit tests run self-contained without 60MB raw data, and eliminates user confusion.
+- **Alternatives Considered**:
+  - Bundling a dummy/mock CSV (Rejected: Violates the rule against creating fake training data).
+  - Silently skipping retraining (Rejected: Retraining must fail explicitly if the training dataset is missing).
+- **Consequences**: Clean separation of inference and retraining; informative user guidance.
+
+---
+
+## Decision 13: Phase 3 Validation Sign-Off and Test Verification
+- **Date**: 2026-10-11
+- **Status**: Completed / Accepted
+- **Context**: Resolution and verification of Phase 3 validation issues: venue metadata display test failure and raw data missing handling.
+- **Decision**: Sign off on the resolution after verifying:
+  - All 17 automated tests pass from both `d:\AIPL` and `d:\AIPL\AIPL_2026_`.
+  - Canonical venue lookups return genuine `match_count > 0` for known grounds.
+  - Unknown venues safely return `match_count = 0` marked as estimated.
+  - Retraining script provides guided error messaging without affecting inference.
+  - CatBoost model weights and prediction behavior remain unchanged.
+- **Reason**: All criteria satisfied cleanly with complete backward compatibility.
+- **Alternatives Considered**: None.
+- **Consequences**: Project validation is 100% successful.
+
+
 

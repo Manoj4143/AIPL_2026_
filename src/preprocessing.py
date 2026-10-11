@@ -51,20 +51,21 @@ def clean_team_names(df, columns):
 
 def find_data_file(filename, search_dirs=None):
     """
-    Locates a data file across standard locations (data/, current dir, parent dir).
+    Locates a data file across standard locations (data/, project root, cwd).
     """
     if search_dirs is None:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        current_file = os.path.abspath(__file__)
+        src_dir = os.path.dirname(current_file)
+        project_dir = os.path.dirname(src_dir)
         search_dirs = [
-            os.path.join(base_dir, 'data'),
-            base_dir,
-            os.path.join(base_dir, '..'),
-            os.path.join(base_dir, '..', 'data'),
-            '.'
+            os.path.join(project_dir, 'data'),
+            project_dir,
+            os.path.join(os.getcwd(), 'data'),
+            os.getcwd()
         ]
     for d in search_dirs:
         candidate = os.path.join(d, filename)
-        if os.path.exists(candidate):
+        if os.path.exists(candidate) and os.path.isfile(candidate):
             return os.path.abspath(candidate)
     return None
 
@@ -72,11 +73,27 @@ def find_data_file(filename, search_dirs=None):
 def load_raw_ball_by_ball(filepath=None):
     """
     Loads and cleans raw ball-by-ball dataset.
+    Raises FileNotFoundError with a clear message explaining that raw data is
+    only required for retraining, while normal inference uses serialized model artifacts.
     """
     if filepath is None:
         filepath = find_data_file('train_IPL.csv')
     if filepath is None or not os.path.exists(filepath):
-        raise FileNotFoundError(f"Could not find 'train_IPL.csv'. Searched standard project directories.")
+        raise FileNotFoundError(
+            "Raw training dataset 'train_IPL.csv' was not found in data/ or project root.\n\n"
+            "[NOTE] Model Retraining vs Inference:\n"
+            "- The raw ball-by-ball dataset ('train_IPL.csv') is strictly required ONLY for optional model retraining.\n"
+            "- For normal match outcome inference and running the analytics dashboard, the pre-trained CatBoost model ('models/catboost_model.cbm') and serialized metadata are already provided and fully operational.\n"
+            "- You do NOT need the raw training CSV to make predictions or run the web dashboard.\n\n"
+            "Quick Run Options:\n"
+            "  - Normal inference:\n"
+            "      streamlit run app.py\n"
+            "  - Run tests:\n"
+            "      python -m unittest discover -s tests -p \"test_*.py\"\n"
+            "  - Optional retraining (requires train_IPL.csv):\n"
+            "      python -m src.preprocessing\n\n"
+            "If you explicitly wish to retrain the model, please place 'train_IPL.csv' in the project root or 'data/' directory before running retraining."
+        )
 
     df = pd.read_csv(filepath, low_memory=False)
     df = clean_team_names(df, ['Bat First', 'Bat Second', 'toss_winner', 'match_won_by'])
@@ -288,6 +305,7 @@ def train_and_save_model(model_dir=None):
     print(f"Model saved to {model_path}")
 
     # Save metadata
+    venue_matches = {str(k): int(v) for k, v in match_df['Venue'].value_counts().items()}
     metadata = {
         'feature_cols': FEATURE_COLS,
         'target_classes': list(le_target.classes_),
@@ -296,7 +314,8 @@ def train_and_save_model(model_dir=None):
         'venue_to_city': venue_to_city,
         'all_teams': sorted(list(team_stats.keys())),
         'all_venues': sorted(list(venue_profile.keys())),
-        'all_toss_decisions': ['bat', 'field']
+        'all_toss_decisions': ['bat', 'field'],
+        'venue_matches': venue_matches
     }
 
     metadata_json_path = os.path.join(model_dir, 'model_metadata.json')
@@ -316,4 +335,13 @@ def train_and_save_model(model_dir=None):
 
 
 if __name__ == '__main__':
-    train_and_save_model()
+    try:
+        train_and_save_model()
+    except FileNotFoundError as e:
+        print("\n" + "=" * 76)
+        print("[RETRAINING HALTED: RAW TRAINING DATASET MISSING]")
+        print("=" * 76)
+        print(str(e))
+        print("=" * 76 + "\n")
+        import sys
+        sys.exit(1)

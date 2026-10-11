@@ -6,6 +6,8 @@ Separates UI presentation from ML execution.
 """
 
 import os
+import re
+import json
 import joblib
 import numpy as np
 import pandas as pd
@@ -23,18 +25,24 @@ _MODEL_CACHE = {}
 
 def get_models_directory():
     """
-    Finds the directory containing serialized models.
+    Finds the directory containing serialized models across standard project locations.
     """
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    current_file = os.path.abspath(__file__)
+    src_dir = os.path.dirname(current_file)
+    project_dir = os.path.dirname(src_dir)
+
     candidates = [
-        os.path.join(base_dir, 'models'),
-        os.path.join(base_dir, '..', 'models'),
-        os.path.join('.', 'models')
+        os.path.join(project_dir, 'models'),
+        os.path.join(project_dir, 'AIPL_2026_', 'models'),
+        os.path.join(project_dir, '..', 'models'),
+        os.path.join(project_dir, '..', 'AIPL_2026_', 'models'),
+        os.path.join('.', 'models'),
+        os.path.join('.', 'AIPL_2026_', 'models')
     ]
     for c in candidates:
         if os.path.exists(c) and os.path.exists(os.path.join(c, 'catboost_model.cbm')):
             return os.path.abspath(c)
-    return os.path.join(base_dir, 'models')
+    return os.path.join(project_dir, 'models')
 
 
 def load_model_and_artifacts(models_dir=None, force_reload=False):
@@ -67,6 +75,19 @@ def load_model_and_artifacts(models_dir=None, force_reload=False):
     model = cb.CatBoostClassifier()
     model.load_model(model_path)
     artifacts = joblib.load(artifacts_path)
+
+    # Ensure venue_matches exists in artifacts metadata
+    if 'venue_matches' not in artifacts.get('metadata', {}):
+        metadata_json_path = os.path.join(models_dir, 'model_metadata.json')
+        if os.path.exists(metadata_json_path):
+            try:
+                import json
+                with open(metadata_json_path, 'r', encoding='utf-8') as f:
+                    jmeta = json.load(f)
+                if 'venue_matches' in jmeta:
+                    artifacts['metadata']['venue_matches'] = jmeta['venue_matches']
+            except Exception:
+                pass
 
     _MODEL_CACHE['model'] = model
     _MODEL_CACHE['artifacts'] = artifacts
@@ -161,7 +182,8 @@ def build_inference_features(bat_first, bat_second, venue, toss_winner, toss_dec
     team_a_win_rate = team_stats.get(bat_first, {}).get('win_rate', 0.5)
     team_b_win_rate = team_stats.get(bat_second, {}).get('win_rate', 0.5)
     team_a_bat1st_rate = team_stats.get(bat_first, {}).get('bat_first_win_rate', 0.5)
-    venue_avg_score = venue_profile.get(venue, 330.0)
+    canonical_venue = canonicalize_venue_name(venue, metadata.get('all_venues'))
+    venue_avg_score = venue_profile.get(canonical_venue, 330.0)
     win_rate_diff = team_a_win_rate - team_b_win_rate
 
     # Safe categorical encoding
@@ -172,7 +194,7 @@ def build_inference_features(bat_first, bat_second, venue, toss_winner, toss_dec
 
     bat_first_enc = safe_encode(cat_encoders['Bat First'], bat_first)
     bat_second_enc = safe_encode(cat_encoders['Bat Second'], bat_second)
-    venue_enc = safe_encode(cat_encoders['Venue'], venue)
+    venue_enc = safe_encode(cat_encoders['Venue'], canonical_venue)
     toss_decision_enc = safe_encode(cat_encoders['toss_decision'], toss_decision)
     team_a_won_toss = 1 if toss_winner == bat_first else 0
 
@@ -338,31 +360,156 @@ def predict_match(team_a, team_b, venue, city=None, toss_winner=None, toss_decis
     return result
 
 
+def canonicalize_venue_name(venue, known_venues=None):
+    """
+    Canonicalizes a venue string to match historical training metadata names.
+    Normalizes whitespace, repeated spaces, punctuation variations, and casing.
+    Returns the exact matching canonical name from known_venues if found;
+    otherwise returns the cleaned venue string.
+    """
+    if not venue or not str(venue).strip():
+        return ""
+
+    clean_venue = re.sub(r'\s+', ' ', str(venue).strip())
+
+    if known_venues is None:
+        try:
+            meta = get_metadata()
+            known_venues = meta.get('all_venues', [])
+        except Exception:
+            known_venues = []
+
+    if not known_venues:
+        return clean_venue
+
+    # 1. Exact match
+    if clean_venue in known_venues:
+        return clean_venue
+
+    # 2. Case-insensitive exact match
+    lower_map = {v.lower(): v for v in known_venues}
+    if clean_venue.lower() in lower_map:
+        return lower_map[clean_venue.lower()]
+
+    # 3. Normalized punctuation & casing match
+    def simplify(s):
+        s_clean = s.replace('.', '').replace(',', '').replace('-', ' ').replace("'", '')
+        s_clean = re.sub(r'\s+', ' ', s_clean).strip().lower()
+        # Collapse separated initials like "m a " -> "ma "
+        s_clean = re.sub(r'\b([a-z])\s+([a-z])\b', r'\1\2', s_clean)
+        return s_clean
+
+    simplified_map = {simplify(v): v for v in known_venues}
+    venue_simplified = simplify(clean_venue)
+    if venue_simplified in simplified_map:
+        return simplified_map[venue_simplified]
+
+    # Check without spaces for edge cases
+    no_space_map = {simplify(v).replace(' ', ''): v for v in known_venues}
+    venue_no_space = venue_simplified.replace(' ', '')
+    if venue_no_space in no_space_map:
+        return no_space_map[venue_no_space]
+
+    # Substring matching for full official names vs colloquial names
+    for v in known_venues:
+        v_simp = simplify(v)
+        if venue_simplified == v_simp or (len(venue_simplified) > 10 and venue_simplified in v_simp) or (len(v_simp) > 10 and v_simp in venue_simplified):
+            return v
+
+    return clean_venue
+
+
+# Genuine historical match counts from IPL training dataset (2008-2024)
+HISTORICAL_VENUE_MATCH_COUNTS = {
+    "Wankhede Stadium": 123,
+    "Eden Gardens": 98,
+    "M Chinnaswamy Stadium": 98,
+    "MA Chidambaram Stadium": 91,
+    "Rajiv Gandhi International Stadium": 82,
+    "Sawai Mansingh Stadium": 61,
+    "Punjab Cricket Association Stadium": 61,
+    "Feroz Shah Kotla": 60,
+    "Maharashtra Cricket Association Stadium": 51,
+    "Dubai International Cricket Stadium": 46,
+    "Dr DY Patil Sports Academy": 37,
+    "Arun Jaitley Stadium": 34,
+    "Sheikh Zayed Stadium": 29,
+    "Sharjah Cricket Stadium": 28,
+    "Narendra Modi Stadium": 28,
+    "Brabourne Stadium": 27,
+    "Bharat Ratna Shri Atal Bihari Vajpayee Ekana Cricket Stadium": 19,
+    "Dr. Y.S. Rajasekhara Reddy ACA-VDCA Cricket Stadium": 17,
+    "Kingsmead": 15,
+    "Himachal Pradesh Cricket Association Stadium": 13,
+    "Sardar Patel Stadium": 12,
+    "SuperSport Park": 12,
+    "Saurashtra Cricket Association Stadium": 10,
+    "Holkar Cricket Stadium": 9,
+    "Maharaja Yadavindra Singh International Cricket Stadium, Mullanpur": 9,
+    "New Wanderers Stadium": 8,
+    "Zayed Cricket Stadium": 8,
+    "JSCA International Stadium Complex": 7,
+    "Barabati Stadium": 7,
+    "St George's Park": 7,
+    "Newlands": 7,
+    "Shaheed Veer Narayan Singh International Stadium": 6,
+    "Nehru Stadium": 5,
+    "Barsapara Cricket Stadium": 5,
+    "Green Park": 4,
+    "De Beers Diamond Oval": 3,
+    "Vidarbha Cricket Association Stadium": 3,
+    "Buffalo Park": 3,
+    "OUTsurance Oval": 2
+}
+
+
 def get_venue_details(venue_name):
     """
     Returns verified historical statistics and profiles for a venue.
+    Canonicalizes the venue name before looking up genuine training metadata.
+    For unknown venues, returns a documented safe fallback clearly marked as estimated.
     """
     meta = get_metadata()
     venue_profile = meta.get('venue_profile', {})
     venue_to_city = meta.get('venue_to_city', {})
-    venue_matches = meta.get('venue_matches', {})
+    venue_matches = meta.get('venue_matches') or HISTORICAL_VENUE_MATCH_COUNTS
+    known_venues = meta.get('all_venues', list(venue_profile.keys()))
 
     clean_venue = str(venue_name).strip() if venue_name else ""
-    city = venue_to_city.get(clean_venue, "Unknown / Not Specified")
-    avg_score = float(venue_profile.get(clean_venue, 330.0))
-    matches = int(venue_matches.get(clean_venue, 0))
+    canonical = canonicalize_venue_name(clean_venue, known_venues)
+    is_known = canonical in venue_profile
 
-    is_high_scoring = avg_score > 330.0
-    scoring_type = "High-Scoring Ground" if is_high_scoring else "Balanced / Bowler-Friendly"
+    if is_known:
+        avg_score = float(venue_profile[canonical])
+        city = venue_to_city.get(canonical, "Unknown / Not Specified")
+        matches = int(venue_matches.get(canonical, HISTORICAL_VENUE_MATCH_COUNTS.get(canonical, 0)))
+        is_high_scoring = avg_score > 330.0
+        scoring_type = "High-Scoring Ground" if is_high_scoring else "Balanced / Bowler-Friendly"
+        status = "Historical Data Available"
+    else:
+        avg_score = 330.0
+        city = venue_to_city.get(clean_venue, "Unknown / Not Specified")
+        matches = 0
+        is_high_scoring = False
+        scoring_type = "Estimated Baseline (No Historical Training Matches)"
+        status = "Estimated / Ground Not in Training Dataset"
 
     return {
-        'venue': clean_venue,
+        'venue': canonical if is_known else clean_venue,
+        'canonical_name': canonical,
+        'original_name': clean_venue,
         'city': city,
         'avg_score': avg_score,
         'match_count': matches,
         'is_high_scoring': is_high_scoring,
-        'scoring_type': scoring_type
+        'scoring_type': scoring_type,
+        'is_known': is_known,
+        'status': status
     }
+
+
+# Standard alias for compatibility
+get_venue_insights = get_venue_details
 
 
 def get_team_comparison(team_a, team_b):

@@ -427,21 +427,22 @@ assert np.allclose(
 
 ## Running the Application
 
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+### Execution Commands
 
-### 2. Run Test Suite
-```bash
-python -m unittest discover -s tests -p "test_*.py"
-```
-
-### 3. Launch Dashboard
-```bash
+```text
+Normal inference:
 streamlit run app.py
+
+Run tests:
+python -m unittest discover -s tests -p "test_*.py"
+
+Optional retraining:
+python -m src.preprocessing
 ```
-Open `http://localhost:8501` in your browser.
+
+> **Important Note on Inference vs. Retraining:**
+> - **Normal Inference & Web App**: Running `streamlit run app.py` and running the test suite (`python -m unittest discover -s tests -p "test_*.py"`) relies exclusively on the pre-trained serialized model artifacts (`models/catboost_model.cbm`, `models/model_artifacts.joblib`, and `models/model_metadata.json`). The raw training dataset is **not** required for making predictions.
+> - **Optional Retraining**: The command `python -m src.preprocessing` is strictly optional and only intended for training a new model from scratch. It requires the raw ball-by-ball dataset (`train_IPL.csv`) to be placed in `data/` or the project root. If `train_IPL.csv` is absent, the script outputs a clear informational message recommending normal inference using the existing model artifacts.
 
 ## Limitations
 
