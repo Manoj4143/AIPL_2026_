@@ -1,233 +1,496 @@
-# AIPL 2026 - IPL Match Outcome Forecast
+# IPL Match Outcome Prediction System
 
-A live forecasting competition. You build a model on historical IPL ball-by-ball data, submit probabilistic predictions for upcoming IPL 2026 matches, and watch your rank shift live as each match plays out.
+A probabilistic machine-learning system that predicts IPL match outcomes using historical ball-by-ball cricket data.
 
----
+The system predicts not only which team is likely to win, but also whether the victory margin will be small or large.
 
-## The prediction task
+## Project Overview
 
-For every match in the scoring set, predict the probability of each of **4 outcome classes**:
+This project uses historical IPL match data from 2008 onwards to train a multiclass classification model.
 
-| Class | Definition |
+For every match, the model predicts probabilities for four possible outcomes:
+
+| Class | Meaning |
 |---|---|
-| `A_small` | Team A wins by ≤ 20 runs **OR** by ≤ 5 wickets |
-| `A_big` | Team A wins by > 20 runs **OR** by ≥ 6 wickets |
-| `B_small` | Team B wins by ≤ 20 runs **OR** by ≤ 5 wickets |
-| `B_big` | Team B wins by > 20 runs **OR** by ≥ 6 wickets |
+| `A_small` | Team A wins by a small margin |
+| `A_big` | Team A wins by a large margin |
+| `B_small` | Team B wins by a small margin |
+| `B_big` | Team B wins by a large margin |
 
-The four probabilities must sum to 1.0 per match.
+A small win is defined as:
 
-### Team A vs Team B convention — read carefully
+- Winning by 20 runs or fewer, or
+- Winning by 5 wickets or fewer
 
-The label of "Team A" and "Team B" is determined as follows:
+A big win is defined as:
 
-- **For historical 2025 holdout matches (Public Leaderboard):** Team A = team batting first. Team B = team batting second. (Determined by the toss decision, which has already happened.)
+- Winning by more than 20 runs, or
+- Winning by 6 or more wickets
 
-- **For IPL 2026 scoring matches (Private Leaderboard):** Team A = home team (the team listed first in the official BCCI fixture). Team B = away team. **The toss has not happened at the time you submit predictions**, so Team A is *not* the team batting first for these matches — Team A is whoever the BCCI schedule calls the home team.
+The prediction probabilities for every match sum to 1.0.
 
-This asymmetry is deliberate. You're submitting predictions before the toss, so we anchor on the schedule-time team identity. Refer to `schedule.csv` for the canonical Team A / Team B assignment for the 5 scoring fixtures.
+## Objectives
 
----
+The main objectives of this project are:
 
-## Files in this bundle
+1. Transform ball-by-ball IPL data into match-level features.
+2. Derive meaningful outcome labels from historical match results.
+3. Train a multiclass machine-learning model.
+4. Generate calibrated outcome probabilities.
+5. Evaluate the model using multiclass log loss.
+6. Provide an interactive web interface for match predictions.
+7. Deploy the application so that users can test predictions easily.
 
+## Machine-Learning Workflow
+
+```text
+Historical ball-by-ball data
+            ↓
+Data cleaning and preprocessing
+            ↓
+Match-level feature engineering
+            ↓
+Outcome-label generation
+            ↓
+Model training
+            ↓
+Probability prediction
+            ↓
+Model evaluation
+            ↓
+Interactive web application
 ```
-train.zip
-├── train_IPL.csv           Ball-by-ball data, 1,145 matches (2008 → mid-2025)
-├── schedule.csv            The 5 IPL 2026 scoring fixtures
-├── sample_submission.csv   53-row template with uniform 0.25 priors
-├──public_lb_matches.csv   Pre-match metadata for the 48 held-out matches
-└── README.md               This document
+
+## Dataset
+
+The primary dataset contains historical IPL ball-by-ball information.
+
+Important fields include:
+
+- Match ID
+- Match date
+- Season
+- Venue
+- City
+- Batting-first team
+- Batting-second team
+- Toss winner
+- Toss decision
+- Batter
+- Bowler
+- Runs scored
+- Extras
+- Wickets
+- Overs
+- Innings totals
+- Balls remaining
+- Match result
+
+The dataset contains information from multiple IPL seasons and allows the model to learn patterns related to team performance, venue, toss decisions, scoring, and match margins.
+
+## Feature Engineering
+
+The ball-level data is aggregated into match-level information.
+
+The feature-engineering process includes:
+
+- Team identities
+- Venue and city
+- Toss winner
+- Toss decision
+- First-innings score
+- Second-innings score
+- Total wickets
+- Run rate
+- Runs required
+- Balls remaining
+- Wickets lost
+- Historical team performance
+- Historical venue performance
+- Batting-first and chasing patterns
+
+The target variable is generated from the winning team and the winning margin.
+
+Matches with ties, abandoned results, or no-results are excluded from supervised training where an outcome label cannot be determined reliably.
+
+## Model
+
+The main model used in this project is CatBoost.
+
+CatBoost was selected because:
+
+- It works well with categorical variables.
+- It can model nonlinear relationships.
+- It requires less manual encoding for categorical features.
+- It performs well on structured tabular data.
+- It supports multiclass probability prediction.
+
+The model performs four-class classification and returns a probability distribution for every match.
+
+Example prediction:
+
+```text
+A_small: 0.34
+A_big:   0.18
+B_small: 0.29
+B_big:   0.19
 ```
 
-**Held-out matches (used for Public Leaderboard):**
-- The 24 most recent 2025 matches (May 2 → June 3, 2025)
-- The 24 played 2026 matches (March 28 → April 16, 2026)
+The highest probability represents the model's most likely outcome.
 
-These 48 matches are physically absent from `train_IPL.csv`. You don't see their ball-by-ball data, only their existence as match IDs in `sample_submission.csv`. 45 of them are scoreable (3 are abandoned/no-result and excluded from scoring).
+## Evaluation Metric
 
----
+The main evaluation metric is multiclass log loss.
 
-## Data dictionary — `train_IPL.csv` (38 columns)
+Log loss evaluates the quality of predicted probabilities rather than only the final predicted class.
 
-272,704 rows × 38 columns. One row per ball.
+Lower log loss is better.
 
-### Identifiers and timing
+The expected baseline values are:
 
-| Column | Description |
-|---|---|
-| `Match ID` | Unique integer identifier for the match |
-| `Date` | Match date (YYYY-MM-DD) |
-| `season` | IPL season (string, e.g. `"2024/25"`) |
-| `Venue` | Stadium name (canonicalized — see note below) |
-| `city` | City of the venue |
+| Model | Expected Log Loss |
+|---|---:|
+| Uniform random prediction | Approximately 1.3863 |
+| Class-prior baseline | Approximately 1.32–1.35 |
+| Reasonably engineered model | Approximately 1.20–1.30 |
+| Strong calibrated model | Approximately 0.95–1.10 |
 
-### Teams and toss
+The project compares the CatBoost model against simple baselines to verify that the machine-learning model provides meaningful improvement.
 
-| Column | Description |
-|---|---|
-| `Bat First` | Team batting first this match (= Team A in historical labels) |
-| `Bat Second` | Team batting second (= Team B in historical labels) |
-| `toss_winner` | Team that won the toss |
-| `toss_decision` | What the toss winner chose: `bat` or `field` |
+## Model Validation
 
-### Ball-level events
+The validation process includes:
 
-| Column | Description |
-|---|---|
-| `Innings` | Innings number (1 = first innings, 2 = second innings) |
-| `Over` | Over number (1-indexed) |
-| `Ball` | Ball number within the over (1-indexed) |
-| `Batter` | Player on strike for this ball |
-| `Non Striker` | Player at non-striker's end |
-| `Bowler` | Bowler delivering this ball |
-| `Batter Runs` | Runs scored off the bat (excluding extras) |
-| `Extra Runs` | Extras conceded on this ball (wides, no-balls, byes, leg-byes, penalty) |
-| `Runs From Ball` | Total runs from this ball (`Batter Runs + Extra Runs`) |
-| `Ball Rebowled` | 1 if the ball was a rebowl (e.g. wide), else 0 |
-| `Extra Type` | List indicator for type of extra (e.g. `'wides'`, `'noballs'`, `'legbyes'`) |
-| `Wicket` | 1 if a wicket fell on this ball, else 0 |
-| `Dismissal Method` | How the batter was out (e.g. `caught`, `bowled`, `lbw`, `run out`) |
-| `Player Out` | Player dismissed (NaN if no wicket) |
-| `Valid Ball` | 1 if a legal delivery (counts toward the over), 0 if a wide/no-ball |
+- Time-aware train-validation splitting
+- Comparison against a uniform baseline
+- Comparison against a class-prior baseline
+- Multiclass log-loss evaluation
+- Prediction probability validation
+- Confusion matrix analysis
+- Feature-importance analysis
+- Class-distribution analysis
 
-### Engineered cumulative columns (running state per innings)
+The final prediction probabilities are checked to ensure:
 
-These columns track innings state up to and including the current ball.
-
-| Column | Description |
-|---|---|
-| `Innings Runs` | Cumulative runs in this innings up to this ball |
-| `Innings Wickets` | Cumulative wickets fallen in this innings |
-| `Target Score` | Target the chasing side needs to win (innings 1 final + 1) |
-| `Runs to Get` | Runs the chasing side still needs (innings 2 only) |
-| `Balls Remaining` | Legal balls remaining in this innings |
-| `Total Batter Runs` | Cumulative runs scored by the batter on strike up to this ball |
-| `Total Non Striker Runs` | Cumulative runs scored by the non-striker |
-| `Batter Balls Faced` | Balls the on-strike batter has faced |
-| `Non Striker Balls Faced` | Balls the non-striker has faced |
-| `Player Out Runs` | Runs scored by the dismissed batter (NaN if no wicket) |
-| `Player Out Balls Faced` | Balls faced by the dismissed batter |
-| `Bowler Runs Conceded` | Cumulative runs conceded by this bowler in this innings |
-
-### Match-level outcome columns
-
-These are **constant across every ball of a single match** (`groupby('Match ID').first()` works cleanly).
-
-| Column | Description |
-|---|---|
-| `match_won_by` | Name of the winning team (use this to derive Team A / Team B side of the label) |
-| `result_type` | NaN for normal matches; `'tie'`, `'no result'` for edge cases |
-
-> **Important:** `match_won_by` is part of the **target label**, not a feature. It is available for past matches so you can derive training labels. It will not be available at inference time for the held-out matches or the IPL 2026 fixtures.
-
----
-
-## Deriving training labels — your first task
-
-We have **intentionally not provided** a pre-computed 4-class label or a `win_outcome` margin string. You must derive both yourself from the data.
-
-Match-level columns are constant per ball, so collapse with groupby:
-Derive 4-class labels from columns in train_IPL.csv. You'll need to:
-1. Collapse to a match-level view
-2. Determine the winning side using match_won_by and Bat First
-3. Determine the margin using cumulative innings totals (Innings Runs at the end of each innings, and Innings Wickets when the chase finishes)
-4. Apply the 4-class rule (≤20 runs / ≤5 wickets = small)
-Filter out matches with result_type = tie or no result.
-
-After joining innings totals back into your match table, apply this function to get a 4-class label per match. Expect roughly 1,124 labelable matches out of 1,145 (the rest are ties, no-results, or abandoned).
-
-
-### Edge cases worth knowing
-
-- **Ties (`result_type='tie'`)**: 15 matches in the data. Often resolved by Super Over in real life, but here marked as ties. Exclude from training.
-- **No-results (`result_type='no result'`)**: ~6 matches with no resolution. Exclude from training.
-- **DLS-affected matches (Duckworth-Lewis applied)**: ~10-12 matches. The naive `inn1_runs - inn2_runs` margin computation will not match the official DLS-adjusted margin for these. We're not flagging them explicitly — handling them is up to you. Options: accept ~1% label noise, drop them via heuristic (e.g. innings 2 ended with > 5 balls remaining and innings 2 score < target), or use external sources to identify them.
-
----
-
-## Submission format — `submission.csv`
-
-Submit a CSV with exactly **53 rows × 5 columns**:
-
+```text
+0 ≤ probability ≤ 1
+sum of four probabilities = 1
 ```
+
+## Interactive Web Application
+
+The planned interactive web application will allow users to enter match details and receive real-time predictions.
+
+### User Inputs
+
+The application will support inputs such as:
+
+- Team A
+- Team B
+- Venue
+- City
+- Toss winner
+- Toss decision
+- Optional match conditions
+
+### Application Output
+
+The application will display:
+
+- Predicted most likely outcome
+- Probability of each outcome
+- Probability chart
+- Team comparison
+- Model explanation
+- Prediction confidence
+- Important features influencing the prediction
+
+Example:
+
+```text
+Most likely outcome: Team A wins by a small margin
+
+Team A small win: 34%
+Team A big win:   18%
+Team B small win: 29%
+Team B big win:   19%
+```
+
+### Planned Application Architecture
+
+```text
+User input
+    ↓
+Input validation
+    ↓
+Feature transformation
+    ↓
+Trained CatBoost model
+    ↓
+Probability prediction
+    ↓
+Charts and prediction explanation
+```
+
+### Recommended Technology Stack
+
+- Python
+- Pandas
+- NumPy
+- Scikit-learn
+- CatBoost
+- Streamlit
+- Matplotlib
+- Seaborn
+- Plotly
+
+Streamlit is suitable because it allows the trained model to be converted into a web application quickly without requiring a separate frontend framework.
+
+## Suggested Application Structure
+
+```text
+AIPL_2026_/
+├── app.py
+├── AIPL.ipynb
+├── README.md
+├── requirements.txt
+├── data/
+│   ├── train_IPL.csv
+│   └── schedule.csv
+├── models/
+│   └── catboost_model.cbm
+├── src/
+│   ├── preprocessing.py
+│   ├── feature_engineering.py
+│   └── prediction.py
+├── submissions/
+│   └── submission_final.csv
+└── assets/
+    └── screenshots/
+```
+
+## Example Streamlit Usage
+
+After installing the dependencies, run:
+
+```bash
+streamlit run app.py
+```
+
+The application will open in a browser and provide an interactive prediction interface.
+
+## Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Manoj4143/AIPL_2026_.git
+cd AIPL_2026_
+```
+
+Install the required packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the notebook:
+
+```bash
+jupyter notebook AIPL.ipynb
+```
+
+Run the interactive application:
+
+```bash
+streamlit run app.py
+```
+
+## Requirements
+
+The project requires:
+
+```text
+pandas
+numpy
+scikit-learn
+catboost
+matplotlib
+seaborn
+plotly
+streamlit
+jupyter
+```
+
+## Submission Format
+
+The prediction output follows the required format:
+
+```text
 match_id,A_small,A_big,B_small,B_big
-1473488,0.25,0.25,0.25,0.25
-1473489,0.25,0.25,0.25,0.25
-...
-1527674,0.25,0.25,0.25,0.25
-1527675,0.25,0.25,0.25,0.25
-...
-M_2026_T01,0.25,0.25,0.25,0.25
-M_2026_T02,0.25,0.25,0.25,0.25
-M_2026_T03,0.25,0.25,0.25,0.25
-M_2026_T04,0.25,0.25,0.25,0.25
-M_2026_T05,0.25,0.25,0.25,0.25
 ```
 
-- Rows 1–24: held-out 2025 matches (numeric Match IDs)
-- Rows 25–48: played 2026 matches (numeric Match IDs)
-- Rows 49–53: IPL 2026 May scoring fixtures (`M_2026_T01` → `M_2026_T05`)
-- Each row's 4 probability columns must sum to 1.0
-- Probabilities must be in `[0, 1]`
-- Match IDs must match exactly (same string format) as `sample_submission.csv`
+Each row contains:
 
-A submission that's just `sample_submission.csv` (uniform 0.25 priors) scores `ln(4) ≈ 1.3863` — the trivial baseline.
+- Match ID
+- Probability of Team A winning by a small margin
+- Probability of Team A winning by a large margin
+- Probability of Team B winning by a small margin
+- Probability of Team B winning by a large margin
 
----
+The four probability columns must sum to 1.0 for every match.
 
-## Evaluation metric — Mean Columnwise Log Loss
+## Example Prediction Validation
 
-For each scored match, log loss is computed as:
+```python
+probability_columns = [
+    "A_small",
+    "A_big",
+    "B_small",
+    "B_big"
+]
 
+assert predictions[probability_columns].between(0, 1).all().all()
+
+assert np.allclose(
+    predictions[probability_columns].sum(axis=1),
+    1.0,
+    atol=1e-6
+)
 ```
-loss_match = - sum over 4 classes c of: y_true[c] * log(y_pred[c])
+
+## Current Project Status: Phase 2 Completed
+
+### Completed
+
+- **Interactive IPL Analytics Dashboard (`app.py`)**:
+  - Structured 5-tab user interface:
+    1. `🔮 Match Prediction`: Input parameters, highlight outcome card, probability metrics, interactive Plotly bar chart, breakdown table, and 100% sum verification.
+    2. `🔍 Model Explanation`: Transparent feature inputs, batting order dynamics, and native CatBoost TreeSHAP attribution chart.
+    3. `⚔️ Team Comparison`: Side-by-side win rate metrics, bat-first win rates, total matches, and strength differential bar chart.
+    4. `🏟️ Venue Insights`: Venue scoring profile, host city, training match sample size, and high-scoring ground classification.
+    5. `📜 Session History`: Audit log of user predictions within the active session with a clear-history trigger.
+- **Explainability Engine (`src/prediction.py`)**:
+  - Integrated native CatBoost C++ TreeSHAP attribution (`type='ShapValues'`) without requiring heavy or unstable external packages.
+  - Per-prediction feature contribution analysis showing which factors pushed probabilities higher or lower.
+- **Historical Team & Venue Baselines**:
+  - Team win rates and bat-first win rates computed from historical match records.
+  - Genuine match sample sizes for all 39 venues.
+- **Robust Input Validation & Error Boundaries**:
+  - Prevents selecting identical teams for Team A and Team B.
+  - Automatic toss-order and innings sequence resolution.
+  - Fallback encoding for unseen categories and missing optional metadata.
+- **Automated Test Suite (`tests/`)**:
+  - 17 unit tests passing in `tests/test_phase1.py` and `tests/test_phase2.py`.
+  - Tests covering predictions, toss-order dynamics, TreeSHAP generation, team comparisons, venue metrics, and history management.
+- **Decision Tracking (`decision.md`)**:
+  - Complete decision records from Decision 1 through Decision 10.
+
+### In Progress
+
+- Phase 3 deployment packaging preparation.
+
+### Planned (Phase 3 & Deployment)
+
+- Docker containerization for local and cloud deployment.
+- High-performance REST API endpoint using FastAPI.
+- Live odds or match monitoring integrations.
+- Player-level Playing XI statistics and recent-form momentum indices.
+
+## Dashboard Demonstration & Screenshots
+
+```text
++-----------------------------------------------------------------------------------+
+|  🏏 IPL Match Outcome Prediction System                                            |
+|  Probabilistic ML Analytics Dashboard powered by CatBoost                          |
++-----------------------------------------------------------------------------------+
+|  [🔮 Match Prediction] [🔍 Model Explanation] [⚔️ Team Comparison] [🏟️ Venue] ... |
++-----------------------------------------------------------------------------------+
+|  Match Configuration:                                                             |
+|  Team A: Chennai Super Kings           Team B: Gujarat Titans                     |
+|  Venue:  MA Chidambaram Stadium        Toss:   CSK (bat)                          |
+|                                                                                   |
+|  [ 🔮 Predict Match Outcome ]                                                     |
+|                                                                                   |
+|  +-----------------------------------------------------------------------------+  |
+|  |  MOST LIKELY OUTCOME: B_big (31.91%)                                        |  |
+|  |  Gujarat Titans wins by a large margin (> 20 runs or >= 6 wickets)          |  |
+|  +-----------------------------------------------------------------------------+  |
+|                                                                                   |
+|  Probabilities:  A_small: 26.01% | A_big: 22.29% | B_small: 19.80% | B_big: 31.91%|
+|  [====================== Probability Distribution Chart ======================]   |
+|  ✅ Probability Integrity Validated: Probabilities sum to 100% (1.000000).        |
++-----------------------------------------------------------------------------------+
 ```
 
-Where `y_true` is the one-hot ground truth (1 in the correct class, 0 elsewhere) and `y_pred` is your predicted probability vector.
+*(Screenshots can be stored in `assets/screenshots/`)*
 
-The competition score is the **mean** of `loss_match` across scored matches.
+## Running the Application
 
-**Lower is better.**
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-Reference numbers:
-- Uniform 0.25 prediction: `ln(4) ≈ 1.3863`
-- Class-prior baseline (predict 2023+ historical class proportions for every match): around 1.32–1.35 on the 45-match Public LB
-- A reasonably engineered ML model: 1.20–1.30 range
-- Strong, well-calibrated submissions: 0.95–1.10 range
+### 2. Run Test Suite
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
 
----
+### 3. Launch Dashboard
+```bash
+streamlit run app.py
+```
+Open `http://localhost:8501` in your browser.
 
-## Leaderboard mechanics
+## Limitations
 
-There are **two leaderboards**, both using the same metric.
+Cricket is a high-variance sport, and match predictions are inherently uncertain.
 
-### Public Leaderboard
+The current system has several limitations:
 
-Scored against **48 held-out matches** (45 of which are scoreable; 3 abandoned matches are excluded):
-- **24 from the 2025 season** (May 2 → June 3, 2025) — 22 scoreable, 2 abandoned
-- **24 from the 2026 season** (March 28 → April 16, 2026) — 23 scoreable, 1 abandoned
+- Player availability may not be known in advance.
+- Playing XI information may be unavailable.
+- Injuries and substitutions are difficult to model.
+- Team strength changes between seasons.
+- Weather and pitch conditions may not be fully represented.
+- Toss information may not be available before the match.
+- DLS-affected matches can introduce label noise.
+- Historical patterns may not always apply to future seasons.
 
-These rows are absent from `train_IPL.csv` — you cannot see their ball-by-ball data, only that the matches happened. Their outcomes are known to the host but never shared.
+## Future Improvements
 
-The Public LB is **visible during the build phase** and updates with every submission. It tells you roughly how your model is doing without you knowing the answers.
+Potential improvements include:
 
-### Private Leaderboard
+- Recent team-form features
+- Player-level batting and bowling statistics
+- Expected playing XI information
+- Player injury and availability data
+- Venue-specific performance
+- Weather and pitch information
+- Elo-style team ratings
+- Probability calibration
+- Ensemble models
+- Automated model retraining
+- Prediction monitoring after every match
+- REST API deployment
+- Cloud deployment
 
-Scored against the **5 IPL 2026 scoring fixtures** (May 21–24). These matches haven't been played at submission lock time. Predictions are locked. As each match plays out in real life, the private leaderboard updates **live**.
+## Conclusion
 
-The Private LB is **the actual evaluation**. Your final ranking is based on it.
+This project demonstrates an end-to-end machine-learning workflow for sports prediction.
 
-### Submission limits
+It combines:
 
-- **5 submissions per day** per team during the build phase
-- **1 final submission** to be selected for Private LB scoring
-- Submissions automatically lock at the build-phase deadline
+- Real-world structured data
+- Feature engineering
+- Multiclass classification
+- Probabilistic prediction
+- Model evaluation
+- Interactive deployment
 
----
+The final goal is to provide a practical prediction system that allows users to enter match information and understand the probability of each possible match outcome.
 
+## Author
 
-
-## Note:
-
-T20 cricket is genuinely high-variance. Even professional bookies' implied 4-class probabilities for IPL matches typically achieve log loss of 1.10–1.20. You're not expected to beat that, but you should be able to substantially beat the trivial baselines through thoughtful feature engineering and calibration.
+Developed by Manoj4143 as an IPL machine-learning prediction project.
