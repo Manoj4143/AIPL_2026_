@@ -1,3 +1,14 @@
+---
+title: IPL Match Outcome Prediction System
+emoji: 🏏
+colorFrom: blue
+colorTo: indigo
+sdk: streamlit
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # IPL Match Outcome Prediction System
 
 A probabilistic machine-learning system that predicts IPL match outcomes using historical ball-by-ball cricket data.
